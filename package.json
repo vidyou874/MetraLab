@@ -1,0 +1,16 @@
+{
+  "name": "metralab",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "cd frontend && npm install && npm run build && cp -r .next ../.next",
+    "vercel-build": "cd frontend && npm install && npm run build && cp -r .next ../.next",
+    "start": "cd frontend && npm run start"
+  },
+  "dependencies": {
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}
