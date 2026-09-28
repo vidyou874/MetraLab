@@ -1,0 +1,8 @@
+email,role,full_name
+admin@metralab.local,Administrator,Lab Administrator
+tech@metralab.local,Technician,Alex Vance (Lead Metrologist)
+reviewer@metralab.local,Reviewer,Elena Rostova (Quality Lead)
+auditor@metralab.local,Auditor,Marcus Brody (Audit Director)
+school@science-lab.edu,Technician,Prof. Sarah Jenkins (Physics Lab)
+industry@precision-mfg.com,Technician,David Chen (QA Metrologist)
+kamila@metralab.local,Technician,Kamila Vance (Lead Metrologist)
