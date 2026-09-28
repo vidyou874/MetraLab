@@ -9,6 +9,7 @@ interface ReviewReport {
   accuracyClass: string;
   capacity: string;
   technician: string;
+  assignedReviewer: string;
   submittedAt: string;
   status: "Submitted" | "Finalized" | "Returned" | "Rejected";
   disposition: "Pass" | "Fail" | "Under Review";
@@ -29,6 +30,7 @@ const sampleReviewQueue: ReviewReport[] = [
     accuracyClass: "III",
     capacity: "15 kg (e1=1g, e2=2g, e3=10g)",
     technician: "Alex Vance (Lead Metrologist)",
+    assignedReviewer: "Elena Rostova (Quality Lead)",
     submittedAt: "2026-09-28 10:25 UTC",
     status: "Submitted",
     disposition: "Pass",
@@ -47,6 +49,7 @@ const sampleReviewQueue: ReviewReport[] = [
     accuracyClass: "I",
     capacity: "220 g (e=0.001g, d=0.0001g)",
     technician: "Prof. Sarah Jenkins",
+    assignedReviewer: "Elena Rostova (Quality Lead)",
     submittedAt: "2026-09-28 11:10 UTC",
     status: "Submitted",
     disposition: "Pass",
@@ -63,6 +66,7 @@ const sampleReviewQueue: ReviewReport[] = [
     accuracyClass: "IIII",
     capacity: "10,000 kg (e=10kg)",
     technician: "David Chen",
+    assignedReviewer: "Lab Administrator (Senior Sign-off)",
     submittedAt: "2026-09-28 11:45 UTC",
     status: "Submitted",
     disposition: "Under Review",
@@ -172,7 +176,7 @@ export default function ReviewPage() {
         <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px" }}>
           Submitted Reports Queue ({reports.length})
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "12px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "12px" }}>
           {reports.map((r) => {
             const isCurrent = r.id === selectedReport.id;
             return (
@@ -214,7 +218,7 @@ export default function ReviewPage() {
                   {r.instrumentName}
                 </div>
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                  By {r.technician} • {r.submittedAt}
+                  By {r.technician} • Assigned: {r.assignedReviewer}
                 </div>
               </div>
             );
@@ -231,6 +235,9 @@ export default function ReviewPage() {
               <span style={{ fontSize: "1.2rem", fontWeight: 700 }}>Report #{selectedReport.id}</span>
               <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "2px" }}>
                 Serial: <code>{selectedReport.serialNumber}</code> • Accuracy Class {selectedReport.accuracyClass}
+              </div>
+              <div style={{ fontSize: "0.78rem", color: "var(--accent-yellow)", marginTop: "4px" }}>
+                🛡️ Assigned Reviewer: <strong>{selectedReport.assignedReviewer}</strong> (Workflow routing configured by Administrator)
               </div>
             </div>
             <span

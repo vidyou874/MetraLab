@@ -21,6 +21,7 @@ interface ReportSummary {
   class: "I" | "II" | "III" | "IIII";
   interval_e: number;
   technician: string;
+  assigned_reviewer: string;
   status: "Draft" | "Submitted" | "Returned" | "Finalized";
   points_count: number;
   last_outcome: "Pass" | "Fail" | "Not evaluated";
@@ -35,6 +36,7 @@ const initialReports: ReportSummary[] = [
     class: "I",
     interval_e: 0.001,
     technician: "Alex Vance",
+    assigned_reviewer: "Elena Rostova (Quality Lead)",
     status: "Draft",
     points_count: 3,
     last_outcome: "Pass",
@@ -51,6 +53,7 @@ const initialReports: ReportSummary[] = [
     class: "III",
     interval_e: 1.0,
     technician: "Alex Vance",
+    assigned_reviewer: "Elena Rostova (Quality Lead)",
     status: "Submitted",
     points_count: 4,
     last_outcome: "Pass",
@@ -68,6 +71,7 @@ const initialReports: ReportSummary[] = [
     class: "IIII",
     interval_e: 10.0,
     technician: "David Chen",
+    assigned_reviewer: "Lab Administrator",
     status: "Finalized",
     points_count: 2,
     last_outcome: "Pass",
@@ -183,6 +187,7 @@ export default function ReportsPage() {
       class: newDraftForm.class,
       interval_e: parseFloat(newDraftForm.interval_e) || 0.001,
       technician: newDraftForm.technician,
+      assigned_reviewer: "Elena Rostova (Quality Lead)",
       status: "Draft",
       points_count: 0,
       last_outcome: "Not evaluated",
@@ -192,12 +197,12 @@ export default function ReportsPage() {
     setReports([newRep, ...reports]);
     setSelectedReportId(newRep.id);
     setIsNewDraftModalOpen(false);
-    setNotice(`New draft report #${newRep.report_number} created for ${newRep.instrument}.`);
+    setNotice(`New draft report #${newRep.report_number} created for ${newRep.instrument}. Assigned Reviewer: ${newRep.assigned_reviewer}.`);
   };
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px", flexWrap: "wrap", gap: "14px" }}>
         <div>
           <h1 style={{ fontSize: "1.6rem", fontWeight: 800, margin: "0 0 4px" }}>Test Report Studio</h1>
           <p style={{ color: "var(--text-secondary)", margin: 0, fontSize: "0.9rem" }}>
@@ -222,7 +227,7 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1.9fr", gap: "24px" }}>
+      <div className="reports-split-grid">
         {/* Reports Queue List */}
         <div>
           <h2 style={{ fontSize: "1.05rem", fontWeight: 700, marginBottom: "12px" }}>Active Reports Queue ({reports.length})</h2>
@@ -262,7 +267,7 @@ export default function ReportsPage() {
                     {rep.instrument} • Class {rep.class}
                   </div>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    Technician: {rep.technician} • {rep.points_count} test points recorded
+                    Technician: {rep.technician} • Reviewer: {rep.assigned_reviewer}
                   </div>
                 </div>
               );
@@ -277,6 +282,9 @@ export default function ReportsPage() {
               <span>Report Workspace: {selectedReport.report_number}</span>
               <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "2px" }}>
                 {selectedReport.instrument} (Class {selectedReport.class}, e={selectedReport.interval_e})
+              </div>
+              <div style={{ fontSize: "0.78rem", color: "var(--accent-yellow)", marginTop: "3px" }}>
+                🛡️ Assigned Reviewer: <strong>{selectedReport.assigned_reviewer}</strong> (Routed per Admin Workflow Policy)
               </div>
             </div>
             <span
@@ -319,7 +327,7 @@ export default function ReportsPage() {
           </div>
 
           {/* Measurement Entry Inputs */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+          <div className="responsive-three-col" style={{ gap: "12px", marginBottom: "16px" }}>
             <div className="form-group">
               <label className="form-label">Nominal Load (L)</label>
               <input
@@ -364,7 +372,7 @@ export default function ReportsPage() {
                 {isPass ? "CONFORMS TO TABLE 6" : "EXCEEDS TABLE 6 TOLERANCE"}
               </span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginTop: "8px" }}>
+            <div className="reports-calc-grid">
               <div>
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>TURNING POINT (P)</div>
                 <div style={{ fontWeight: 700, fontSize: "1rem" }}>{P}</div>
@@ -384,17 +392,17 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "12px", marginBottom: "24px" }}>
+          <div style={{ display: "flex", gap: "12px", marginBottom: "24px", flexWrap: "wrap" }}>
             <button
               className="btn-primary"
-              style={{ flex: 1, justifyContent: "center" }}
+              style={{ flex: 1, minWidth: "200px", justifyContent: "center" }}
               onClick={handleAddMeasurement}
             >
               + Add Measurement Reading
             </button>
             <button
               className="btn-secondary"
-              style={{ flex: 1, justifyContent: "center" }}
+              style={{ flex: 1, minWidth: "200px", justifyContent: "center" }}
               onClick={handleSubmitForReview}
               disabled={selectedReport.status === "Submitted" || selectedReport.status === "Finalized"}
             >
@@ -408,7 +416,7 @@ export default function ReportsPage() {
               Recorded Measurement Points ({selectedReport.measurements.length})
             </div>
             <div className="table-container">
-              <table className="data-table" style={{ fontSize: "0.8rem" }}>
+              <table className="data-table wide-table" style={{ fontSize: "0.8rem" }}>
                 <thead>
                   <tr>
                     <th>#</th>
@@ -475,7 +483,7 @@ export default function ReportsPage() {
                 />
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <div className="responsive-two-col" style={{ gap: "12px" }}>
                 <div className="form-group">
                   <label className="form-label">Accuracy Class</label>
                   <select

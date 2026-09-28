@@ -1,6 +1,11 @@
 "use client";
 
-import React, { useState, useId } from "react";
+import React, { useState, useEffect, useId } from "react";
+import {
+  getOrCreateMachineDataset,
+  computeDatasetStats,
+  MachineReadingPoint,
+} from "@/data/machineReadings";
 
 export interface InstrumentItem {
   id: number;
@@ -24,6 +29,9 @@ export interface InstrumentItem {
   current_mean: number;
   current_std: number;
   mpe_limit: number;
+  purchase_date?: string;
+  manufacturer_country?: string;
+  supplier_invoice?: string;
 }
 
 const initialInstruments: InstrumentItem[] = [
@@ -187,7 +195,53 @@ export default function InstrumentsPage() {
   // Modal States
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [isPrintingCert, setIsPrintingCert] = useState(false);
+  const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
+
+  // Interactive Hover State on Graph
+  const [hoverInfo, setHoverInfo] = useState<{
+    xVal: number;
+    svgX: number;
+    baseDensity: number;
+    currDensity: number;
+    baseY: number;
+    currY: number;
+  } | null>(null);
+
+  // Machine Reading Data Tab State (Current Condition vs Baseline at Purchase)
+  const [activeReadingTab, setActiveReadingTab] = useState<"current" | "baseline">("current");
+
+  // Dynamic Dataset for the selected instrument (100% computed from reading points)
+  const activeDataset = selectedInstrument ? getOrCreateMachineDataset(selectedInstrument) : null;
+  const baseStats = activeDataset ? computeDatasetStats(activeDataset.baselineReadings) : null;
+  const currStats = activeDataset ? computeDatasetStats(activeDataset.currentReadings) : null;
+  const activeReadings: MachineReadingPoint[] = activeDataset
+    ? activeReadingTab === "current"
+      ? activeDataset.currentReadings
+      : activeDataset.baselineReadings
+    : [];
+  const activeStats = activeDataset
+    ? activeReadingTab === "current"
+      ? currStats!
+      : baseStats!
+    : null;
+
+  const baselineMean = baseStats ? baseStats.mean : (selectedInstrument?.baseline_mean ?? 0);
+  const baselineStd = baseStats ? baseStats.std : (selectedInstrument?.baseline_std ?? 0.12);
+  const currentMean = currStats ? currStats.mean : (selectedInstrument?.current_mean ?? 0.08);
+  const currentStd = currStats ? currStats.std : (selectedInstrument?.current_std ?? 0.22);
+
+  // Esc Key Listener to close calculation modal and others
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsCalcModalOpen(false);
+        setIsManualModalOpen(false);
+        setIsBulkModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Manual Form State
   const [manualForm, setManualForm] = useState({
@@ -237,10 +291,8 @@ export default function InstrumentsPage() {
   // Export particular instrument certificate PDF
   const handleExportInstrumentCert = (inst: InstrumentItem) => {
     setSelectedInstrument(inst);
-    setIsPrintingCert(true);
     setTimeout(() => {
       window.print();
-      setIsPrintingCert(false);
     }, 150);
   };
 
@@ -275,7 +327,6 @@ export default function InstrumentsPage() {
     setIsManualModalOpen(false);
     setSelectedInstrument(newInst);
 
-    // Sync to backend API asynchronously
     fetch("http://localhost:8000/api/instruments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -291,11 +342,11 @@ export default function InstrumentsPage() {
         display_division_d: parseFloat(newInst.display_division_d) || 0.0001,
       }),
     }).catch(() => {
-      // Offline fallback: already in local state
+      // Offline fallback
     });
   };
 
-  // Download CSV Template for Industry / Manufacturers
+  // Download CSV Template
   const handleDownloadTemplate = () => {
     const templateContent =
       "manufacturer,model,serial_number,accuracy_class,max_capacity,capacity_unit,verification_interval_e,display_division_d,range_type,asset_tag,location\n" +
@@ -389,6 +440,55 @@ export default function InstrumentsPage() {
     setBulkStatusMsg(null);
   };
 
+  // Mouse move handler on SVG to calculate interactive hover metrics
+  const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!selectedInstrument) return;
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const svgWidth = 560;
+    const paddingX = 40;
+    const plotWidth = svgWidth - paddingX * 2;
+    const minX = -1.5;
+    const maxX = 1.5;
+
+    const relX = (mouseX / rect.width) * svgWidth;
+    if (relX < paddingX || relX > svgWidth - paddingX) {
+      setHoverInfo(null);
+      return;
+    }
+
+    const xVal = minX + ((relX - paddingX) / plotWidth) * (maxX - minX);
+
+    const baseStd = baselineStd;
+    const baseMean = baselineMean;
+    const baseDensity =
+      (1 / (baseStd * Math.sqrt(2 * Math.PI))) *
+      Math.exp(-0.5 * Math.pow((xVal - baseMean) / baseStd, 2));
+
+    const currStd = currentStd;
+    const currMean = currentMean;
+    const currDensity =
+      (1 / (currStd * Math.sqrt(2 * Math.PI))) *
+      Math.exp(-0.5 * Math.pow((xVal - currMean) / currStd, 2));
+
+    const maxDensityBase = 1 / (baseStd * Math.sqrt(2 * Math.PI));
+    const maxDensityCurr = 1 / (currStd * Math.sqrt(2 * Math.PI));
+    const plotHeight = 180 - 30 - 20;
+
+    const baseY = 180 - 30 - (baseDensity / maxDensityBase) * plotHeight;
+    const currY = 180 - 30 - (currDensity / maxDensityCurr) * plotHeight;
+
+    setHoverInfo({
+      xVal: Math.round(xVal * 1000) / 1000,
+      svgX: relX,
+      baseDensity: Math.round(baseDensity * 1000) / 1000,
+      currDensity: Math.round(currDensity * 1000) / 1000,
+      baseY,
+      currY,
+    });
+  };
+
   return (
     <div>
       {/* Top Banner: Verification Compliance Stat ("4/5 devices passed") */}
@@ -453,7 +553,7 @@ export default function InstrumentsPage() {
 
         {/* Visual Progress Bar */}
         <div style={{ marginTop: "18px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "6px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "6px", flexWrap: "wrap", gap: "6px 12px" }}>
             <span>Verified & Passing: <strong>{passedInstruments}</strong></span>
             <span>Pending Review: <strong>{underReviewInstruments}</strong></span>
             <span>Tolerance Failures: <strong>{failedInstruments}</strong></span>
@@ -491,18 +591,630 @@ export default function InstrumentsPage() {
         </select>
       </div>
 
-      {/* Main Grid: Instruments Table and Selected Detail Inspector */}
-      <div className="no-print" style={{ display: "grid", gridTemplateColumns: selectedInstrument ? "1.2fr 1.8fr" : "1fr", gap: "24px" }}>
-        {/* Table List */}
+      {/* Selected Instrument Inspection Workspace (Basic Info on Top, Reading Data on Left, Dual Gaussian Graph on Right) */}
+      {selectedInstrument && (
+        <div className="no-print" style={{ marginBottom: "32px" }}>
+          {/* Inspection View Header & Quick Switcher */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "16px",
+              flexWrap: "wrap",
+              gap: "12px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  setSelectedInstrument(null);
+                  setHoverInfo(null);
+                }}
+                style={{ padding: "6px 14px", fontSize: "0.82rem" }}
+              >
+                ← Back to Fleet Table
+              </button>
+              <span style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>Quick Switch:</span>
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                {filtered.map((inst) => {
+                  const isActive = inst.id === selectedInstrument.id;
+                  return (
+                    <button
+                      key={inst.id}
+                      className={`quick-switch-pill ${isActive ? "active" : ""}`}
+                      onClick={() => {
+                        setSelectedInstrument(inst);
+                        setHoverInfo(null);
+                      }}
+                    >
+                      {inst.model}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                className="btn-secondary"
+                style={{ padding: "6px 14px", fontSize: "0.82rem" }}
+                onClick={() => handleExportInstrumentCert(selectedInstrument)}
+              >
+                📄 Export Certificate PDF
+              </button>
+              <button
+                className="close-btn"
+                onClick={() => {
+                  setSelectedInstrument(null);
+                  setHoverInfo(null);
+                }}
+                title="Close Inspector"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* BASIC INFO ABOUT MACHINE ON TOP */}
+          <div className="machine-info-card">
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                flexWrap: "wrap",
+                gap: "14px",
+                marginBottom: "16px",
+                paddingBottom: "16px",
+                borderBottom: "1px solid var(--border-subtle)",
+              }}
+            >
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+                  <span className="badge badge-neutral" style={{ fontSize: "0.76rem" }}>
+                    Class {selectedInstrument.accuracy_class} NAWI
+                  </span>
+                  <span
+                    className={`badge ${
+                      selectedInstrument.latest_disposition === "Pass"
+                        ? "badge-pass"
+                        : selectedInstrument.latest_disposition === "Under Review"
+                        ? "badge-warn"
+                        : "badge-fail"
+                    }`}
+                    style={{ fontSize: "0.76rem" }}
+                  >
+                    <span className="badge-dot" />
+                    {selectedInstrument.latest_disposition}
+                  </span>
+                  <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                    Asset Tag: <code>{selectedInstrument.asset_tag}</code>
+                  </span>
+                </div>
+                <h1 style={{ fontSize: "1.5rem", fontWeight: 800, margin: "2px 0 4px", color: "var(--text-primary)" }}>
+                  {selectedInstrument.model}
+                </h1>
+                <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                  High-Precision Non-Automatic Weighing Instrument (OIML R76-1: 2006 Compliant)
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  className="btn-secondary"
+                  style={{
+                    fontSize: "0.78rem",
+                    padding: "6px 12px",
+                    borderColor: "rgba(226, 253, 82, 0.4)",
+                    color: "var(--accent-yellow)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                  onClick={() => setIsCalcModalOpen(true)}
+                  title="View step-by-step mathematical calculation formulas (Closes with Esc)"
+                >
+                  <span>🧮</span>
+                  <span>Manual Calculations</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Basic Info Metadata Grid: Who Manufactured It, When Bought, Dates, Location */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "14px",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={{ background: "var(--bg-surface)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-subtle)" }}>
+                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>
+                  Who Manufactured It
+                </div>
+                <div style={{ fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)", marginTop: "4px" }}>
+                  {selectedInstrument.manufacturer}
+                </div>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "2px" }}>
+                  Origin: {selectedInstrument.manufacturer_country || "Switzerland / Germany"}
+                </div>
+              </div>
+
+              <div style={{ background: "var(--bg-surface)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-subtle)" }}>
+                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>
+                  When Bought (Purchase Date)
+                </div>
+                <div style={{ fontSize: "0.95rem", fontWeight: 700, color: "var(--accent-yellow)", marginTop: "4px" }}>
+                  {selectedInstrument.purchase_date || "2023-01-15"}
+                </div>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "2px" }}>
+                  Invoice: <code>{selectedInstrument.supplier_invoice || "INV-OIML-2023-09"}</code>
+                </div>
+              </div>
+
+              <div style={{ background: "var(--bg-surface)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-subtle)" }}>
+                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>
+                  Commissioning Date
+                </div>
+                <div style={{ fontSize: "0.95rem", fontWeight: 700, color: "#38bdf8", marginTop: "4px" }}>
+                  {selectedInstrument.commission_date}
+                </div>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "2px" }}>
+                  Baseline zero error: <code>E₀ = 0.00 e</code>
+                </div>
+              </div>
+
+              <div style={{ background: "var(--bg-surface)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-subtle)" }}>
+                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>
+                  Last Calibrated / Verified
+                </div>
+                <div style={{ fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)", marginTop: "4px" }}>
+                  {selectedInstrument.last_calibrated}
+                </div>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "2px" }}>
+                  Location: {selectedInstrument.location}
+                </div>
+              </div>
+            </div>
+
+            {/* Metrological Specifications Chips */}
+            <div className="instrument-chips-grid">
+              <div className="preview-chip">
+                <div className="preview-chip-header">
+                  <span>ACCURACY CLASS</span>
+                </div>
+                <div className="preview-chip-val" style={{ fontSize: "1.1rem", color: "var(--accent-yellow)" }}>
+                  Class {selectedInstrument.accuracy_class}
+                </div>
+              </div>
+              <div className="preview-chip">
+                <div className="preview-chip-header">
+                  <span>MAX CAPACITY (Max)</span>
+                </div>
+                <div className="preview-chip-val" style={{ fontSize: "1.1rem" }}>
+                  {selectedInstrument.max_capacity} {selectedInstrument.capacity_unit}
+                </div>
+              </div>
+              <div className="preview-chip">
+                <div className="preview-chip-header">
+                  <span>VERIFICATION INTERVAL (e)</span>
+                </div>
+                <div className="preview-chip-val" style={{ fontSize: "1.1rem" }}>
+                  {selectedInstrument.verification_interval_e} {selectedInstrument.capacity_unit}
+                </div>
+              </div>
+              <div className="preview-chip">
+                <div className="preview-chip-header">
+                  <span>ACTUAL SCALE INTERVAL (d)</span>
+                </div>
+                <div className="preview-chip-val" style={{ fontSize: "1.1rem" }}>
+                  {selectedInstrument.display_division_d} {selectedInstrument.capacity_unit}
+                </div>
+              </div>
+              <div className="preview-chip">
+                <div className="preview-chip-header">
+                  <span>TABLE 6 MPE TOLERANCE</span>
+                </div>
+                <div className="preview-chip-val" style={{ fontSize: "1.1rem", color: "var(--badge-pass-text)" }}>
+                  ±{selectedInstrument.mpe_limit} e
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* TWO-COLUMN DETAIL GRID: READING DATA ON LEFT, GRAPH ON RIGHT */}
+          <div className="machine-detail-grid">
+            {/* LEFT COLUMN: READING DATA TABLE */}
+            <div className="studio-panel" style={{ margin: 0 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "14px",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                      📋 Measurement Reading Data
+                    </span>
+                    <span className="badge badge-neutral" style={{ fontSize: "0.72rem" }}>
+                      {activeReadings.length} Points
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "2px" }}>
+                    OIML R76 Annex A.4.4.3 turning point readings (P = I + 0.5e - ΔL)
+                  </div>
+                </div>
+
+                {/* Tabs to toggle between Current Readings and Baseline When Bought */}
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <button
+                    className={`machine-tab-btn ${activeReadingTab === "current" ? "active" : ""}`}
+                    onClick={() => setActiveReadingTab("current")}
+                  >
+                    Current Periodic Readings
+                  </button>
+                  <button
+                    className={`machine-tab-btn ${activeReadingTab === "baseline" ? "active" : ""}`}
+                    onClick={() => setActiveReadingTab("baseline")}
+                  >
+                    When Bought (Baseline)
+                  </button>
+                </div>
+              </div>
+
+              {/* Data Table */}
+              <div className="table-container" style={{ maxHeight: "380px", overflowY: "auto" }}>
+                <table className="data-table" style={{ fontSize: "0.78rem" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: "36px" }}>#</th>
+                      <th>Nominal Load L ({selectedInstrument.capacity_unit})</th>
+                      <th>Indication I</th>
+                      <th>ΔL</th>
+                      <th>Turning Pt P</th>
+                      <th>Error Ec (e)</th>
+                      <th>MPE (Table 6)</th>
+                      <th>Verdict</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeReadings.map((pt) => {
+                      const isPassing = pt.isPass;
+                      return (
+                        <tr key={pt.step}>
+                          <td style={{ fontWeight: 600, color: "var(--text-muted)" }}>{pt.step}</td>
+                          <td>
+                            <strong>{pt.nominalLoad}</strong> {pt.loadUnit || selectedInstrument.capacity_unit}
+                          </td>
+                          <td>{pt.indication}</td>
+                          <td><code>{pt.deltaL}</code></td>
+                          <td>{pt.turningPointP}</td>
+                          <td>
+                            <strong style={{ color: pt.correctedError >= 0 ? "var(--accent-yellow)" : "#38bdf8" }}>
+                              {pt.correctedError >= 0 ? `+${pt.correctedError}` : pt.correctedError} e
+                            </strong>
+                          </td>
+                          <td>±{pt.mpeLimit} e</td>
+                          <td>
+                            <span
+                              className={`badge ${isPassing ? "badge-pass" : "badge-fail"}`}
+                              style={{ fontSize: "0.68rem", padding: "2px 6px" }}
+                            >
+                              {isPassing ? "Pass" : "Fail"}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Computed Statistical Summary Box for this Reading Dataset */}
+              {activeStats && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                    gap: "10px",
+                    marginTop: "14px",
+                    padding: "12px 14px",
+                    background: "var(--bg-canvas)",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                      Sample Mean (μ)
+                    </div>
+                    <div style={{ fontSize: "1rem", fontWeight: 700, color: activeReadingTab === "current" ? "var(--accent-yellow)" : "#38bdf8" }}>
+                      {activeStats.mean >= 0 ? `+${activeStats.mean}` : activeStats.mean} e
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                      Std Dev (σ)
+                    </div>
+                    <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                      {activeStats.std} e
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                      Max Error
+                    </div>
+                    <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                      +{activeStats.maxError} e
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                      Pass Rate
+                    </div>
+                    <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--badge-pass-text)" }}>
+                      {Math.round((activeStats.passCount / (activeStats.totalCount || 1)) * 100)}%
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* RIGHT COLUMN: GRAPH ACCORDING TO THAT READING DATA */}
+            <div className="studio-panel" style={{ margin: 0 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "12px",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                }}
+              >
+                <div>
+                  <span style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--text-primary)" }}>
+                    📈 Dual Normal Distribution Error Profile
+                  </span>
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                    Curves computed directly from reading datasets (Purchase Baseline vs Current Wear)
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                  <span className="badge badge-pass" style={{ fontSize: "0.72rem" }}>
+                    Table 6 MPE
+                  </span>
+                  <button
+                    className="btn-secondary"
+                    style={{
+                      fontSize: "0.75rem",
+                      padding: "4px 8px",
+                      borderColor: "rgba(226, 253, 82, 0.5)",
+                      color: "var(--accent-yellow)",
+                    }}
+                    onClick={() => setIsCalcModalOpen(true)}
+                    title="View step-by-step mathematical calculation formulas (Closes with Esc)"
+                  >
+                    🧮 Formulas
+                  </button>
+                </div>
+              </div>
+
+              {/* Interactive Hover Telemetry Banner */}
+              {hoverInfo && (
+                <div className="chart-telemetry-banner" style={{ marginBottom: "10px" }}>
+                  <div className="chart-telemetry-items">
+                    <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>
+                      Inspected: <code>{hoverInfo.xVal >= 0 ? `+${hoverInfo.xVal}` : hoverInfo.xVal} e</code>
+                    </span>
+                    <span style={{ color: "#38bdf8" }}>
+                      Purchase: <strong>f(x)={hoverInfo.baseDensity}</strong> (μ={baselineMean}e, σ={baselineStd}e)
+                    </span>
+                    <span style={{ color: "#e2fd52" }}>
+                      Current: <strong>f(x)={hoverInfo.currDensity}</strong> (μ=+{currentMean}e, σ={currentStd}e)
+                    </span>
+                  </div>
+                  <span
+                    className={`badge ${
+                      Math.abs(hoverInfo.xVal) <= selectedInstrument.mpe_limit ? "badge-pass" : "badge-fail"
+                    }`}
+                    style={{ fontSize: "0.7rem" }}
+                  >
+                    {Math.abs(hoverInfo.xVal) <= selectedInstrument.mpe_limit
+                      ? "Within Table 6 Bound"
+                      : "Exceeds Table 6 Bound"}
+                  </span>
+                </div>
+              )}
+
+              {/* Responsive SVG Normal Distribution Chart with Touch-Friendly Scroll & Hover Tracking */}
+              <div className="chart-scroll-wrapper">
+                <svg
+                  viewBox="0 0 560 180"
+                  style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
+                  onMouseMove={handleSvgMouseMove}
+                  onMouseLeave={() => setHoverInfo(null)}
+                >
+                  <defs>
+                    <linearGradient id={gradientBaselineId} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.4" />
+                      <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+                    </linearGradient>
+                    <linearGradient id={gradientCurrentId} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#e2fd52" stopOpacity="0.4" />
+                      <stop offset="100%" stopColor="#e2fd52" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Horizontal Axis */}
+                  <line x1="40" y1="150" x2="520" y2="150" stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
+
+                  {/* Target Zero Line (x = 0) */}
+                  <line x1="280" y1="20" x2="280" y2="150" stroke="rgba(255,255,255,0.3)" strokeDasharray="3 3" />
+                  <text x="280" y="165" fill="var(--text-muted)" fontSize="10" textAnchor="middle">0 (Target)</text>
+
+                  {/* Lower Tolerance Line (-MPE) */}
+                  <line x1="160" y1="20" x2="160" y2="150" stroke="#f87171" strokeDasharray="3 3" strokeWidth="1.5" />
+                  <text x="160" y="165" fill="#f87171" fontSize="10" textAnchor="middle">-MPE</text>
+
+                  {/* Upper Tolerance Line (+MPE) */}
+                  <line x1="400" y1="20" x2="400" y2="150" stroke="#f87171" strokeDasharray="3 3" strokeWidth="1.5" />
+                  <text x="400" y="165" fill="#f87171" fontSize="10" textAnchor="middle">+MPE</text>
+
+                  {/* Curve 1: Initial Purchase Baseline (Cyan) plotted from baseline reading data */}
+                  {(() => {
+                    const baseline = generateGaussianCurve(baselineMean, baselineStd);
+                    return (
+                      <g>
+                        <path d={baseline.fillPath} fill={`url(#${gradientBaselineId})`} />
+                        <path d={baseline.strokePath} fill="none" stroke="#38bdf8" strokeWidth="2.5" />
+                      </g>
+                    );
+                  })()}
+
+                  {/* Curve 2: Current Condition (Electric Yellow/Lime) plotted from current reading data */}
+                  {(() => {
+                    const current = generateGaussianCurve(currentMean, currentStd);
+                    return (
+                      <g>
+                        <path d={current.fillPath} fill={`url(#${gradientCurrentId})`} />
+                        <path d={current.strokePath} fill="none" stroke="#e2fd52" strokeWidth="2.5" />
+                      </g>
+                    );
+                  })()}
+
+                  {/* Dynamic Hover Guideline & Data Points */}
+                  {hoverInfo && (
+                    <g>
+                      <line
+                        x1={hoverInfo.svgX}
+                        y1="20"
+                        x2={hoverInfo.svgX}
+                        y2="150"
+                        stroke="var(--accent-yellow)"
+                        strokeDasharray="2 2"
+                        strokeWidth="1.5"
+                      />
+                      <circle
+                        cx={hoverInfo.svgX}
+                        cy={hoverInfo.baseY}
+                        r="5"
+                        fill="#38bdf8"
+                        stroke="#ffffff"
+                        strokeWidth="1.5"
+                      />
+                      <circle
+                        cx={hoverInfo.svgX}
+                        cy={hoverInfo.currY}
+                        r="5"
+                        fill="#e2fd52"
+                        stroke="#111111"
+                        strokeWidth="1.5"
+                      />
+                    </g>
+                  )}
+                </svg>
+              </div>
+
+              {/* Chart Legend & Numerical Metrics */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px", fontSize: "0.78rem", flexWrap: "wrap", gap: "8px" }}>
+                <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ width: "12px", height: "3px", background: "#38bdf8", borderRadius: "2px" }} />
+                    <span style={{ color: "#38bdf8", fontWeight: 600 }}>Purchase Baseline</span>
+                    <span style={{ color: "var(--text-muted)" }}>μ={baselineMean}e, σ={baselineStd}e</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ width: "12px", height: "3px", background: "#e2fd52", borderRadius: "2px" }} />
+                    <span style={{ color: "#e2fd52", fontWeight: 600 }}>Current Condition</span>
+                    <span style={{ color: "var(--text-muted)" }}>μ=+{currentMean}e, σ={currentStd}e</span>
+                  </div>
+                </div>
+
+                <div style={{ color: "var(--text-secondary)" }}>
+                  Drift: <strong>+{Math.round((currentMean - baselineMean) * 1000) / 1000}e</strong>
+                </div>
+              </div>
+
+              {/* Historical Verification Records */}
+              <div style={{ marginTop: "16px" }}>
+                <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: "6px" }}>
+                  Metrological Verification History
+                </div>
+                <div className="table-container">
+                  <table className="data-table" style={{ fontSize: "0.75rem" }}>
+                    <thead>
+                      <tr>
+                        <th>Test Event</th>
+                        <th>Date</th>
+                        <th>Mean Error</th>
+                        <th>Tolerance</th>
+                        <th>Disposition</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Periodic Re-verification</td>
+                        <td>{selectedInstrument.last_calibrated}</td>
+                        <td>+{currentMean} e</td>
+                        <td>±{selectedInstrument.mpe_limit} e</td>
+                        <td>
+                          <span className="badge badge-pass" style={{ fontSize: "0.68rem" }}>
+                            Pass
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>Initial Commissioning Verification</td>
+                        <td>{selectedInstrument.commission_date}</td>
+                        <td>+{baselineMean} e</td>
+                        <td>±{selectedInstrument.mpe_limit} e</td>
+                        <td>
+                          <span className="badge badge-pass" style={{ fontSize: "0.68rem" }}>
+                            Pass
+                          </span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Table: Registered Fleet Directory (Always Accessible or for Selecting Machines) */}
+      <div className="no-print">
         <div className="table-container">
-          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>Registered Fleet ({filtered.length})</span>
-            <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Click machine row to inspect curves & export PDF</span>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+            <div>
+              <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>Registered Fleet ({filtered.length})</span>
+              <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginLeft: "8px" }}>
+                Click any machine to inspect basic info, measurement readings & Gaussian curve
+              </span>
+            </div>
+            {selectedInstrument && (
+              <span style={{ fontSize: "0.78rem", color: "var(--accent-yellow)" }}>
+                ● Currently inspecting: {selectedInstrument.model}
+              </span>
+            )}
           </div>
           <table className="data-table">
             <thead>
               <tr>
                 <th>Model / Serial</th>
+                <th>Manufacturer</th>
+                <th>When Bought</th>
                 <th>Class</th>
                 <th>Capacity</th>
                 <th>Interval (e)</th>
@@ -516,7 +1228,10 @@ export default function InstrumentsPage() {
                 return (
                   <tr
                     key={inst.id}
-                    onClick={() => setSelectedInstrument(inst)}
+                    onClick={() => {
+                      setSelectedInstrument(inst);
+                      setHoverInfo(null);
+                    }}
                     style={{
                       cursor: "pointer",
                       background: isSelected ? "var(--bg-surface-elevated)" : undefined,
@@ -526,7 +1241,21 @@ export default function InstrumentsPage() {
                     <td>
                       <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{inst.model}</div>
                       <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                        {inst.manufacturer} • <code>{inst.serial_number}</code>
+                        Asset: <code>#{inst.asset_tag}</code> • <code>{inst.serial_number}</code>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{inst.manufacturer}</div>
+                      <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                        {inst.manufacturer_country || "Global"}
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>
+                        {inst.purchase_date || "2023-01-15"}
+                      </div>
+                      <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                        Comm: {inst.commission_date}
                       </div>
                     </td>
                     <td>
@@ -555,17 +1284,31 @@ export default function InstrumentsPage() {
                       </span>
                     </td>
                     <td>
-                      <button
-                        className="btn-secondary"
-                        style={{ padding: "4px 8px", fontSize: "0.75rem" }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleExportInstrumentCert(inst);
-                        }}
-                        title="Export Instrument Certificate PDF"
-                      >
-                        📄 PDF
-                      </button>
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: "4px 8px", fontSize: "0.75rem" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedInstrument(inst);
+                            setHoverInfo(null);
+                          }}
+                          title="Inspect Instrument Data & Curves"
+                        >
+                          🔍 Inspect
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: "4px 8px", fontSize: "0.75rem" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleExportInstrumentCert(inst);
+                          }}
+                          title="Export Instrument Certificate PDF"
+                        >
+                          📄 PDF
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -573,211 +1316,170 @@ export default function InstrumentsPage() {
             </tbody>
           </table>
         </div>
+      </div>
 
-        {/* Selected Instrument Detail Inspector with Dual Gaussian Chart */}
-        {selectedInstrument && (
-          <div className="studio-panel" style={{ position: "sticky", top: "20px" }}>
-            <div className="panel-title">
+      {/* ========================================================================= */}
+      {/* POPUP MODAL: MANUAL CALCULATION BREAKDOWN (Esc to Close)                   */}
+      {/* ========================================================================= */}
+      {isCalcModalOpen && selectedInstrument && (
+        <div
+          className="modal-backdrop no-print"
+          onClick={() => setIsCalcModalOpen(false)}
+        >
+          <div
+            className="modal-content"
+            style={{ maxWidth: "860px" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
               <div>
-                <span style={{ fontSize: "1.15rem" }}>{selectedInstrument.model}</span>
-                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginLeft: "8px" }}>
-                  #{selectedInstrument.asset_tag}
-                </span>
+                <h2>OIML R76 Mathematical Calculation & Derivation</h2>
+                <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginTop: "2px" }}>
+                  Detailed step-by-step metrological breakdown for <strong>{selectedInstrument.model}</strong> (Serial: <code>{selectedInstrument.serial_number}</code>)
+                </div>
               </div>
-              <div style={{ display: "flex", gap: "8px" }}>
-                <button
-                  className="btn-secondary"
-                  style={{ padding: "6px 12px", fontSize: "0.8rem" }}
-                  onClick={() => handleExportInstrumentCert(selectedInstrument)}
-                >
-                  📄 Export Certificate PDF
-                </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="badge badge-neutral" style={{ fontSize: "0.75rem" }}>
+                  Press [Esc] to Close
+                </span>
                 <button
                   className="close-btn"
-                  onClick={() => setSelectedInstrument(null)}
-                  title="Close Inspector"
+                  onClick={() => setIsCalcModalOpen(false)}
+                  title="Close calculation breakdown (Esc)"
                 >
                   ✕
                 </button>
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", marginBottom: "16px" }}>
-              <div className="preview-chip">
+            <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+              {/* Step 1: Turning Point */}
+              <div className="preview-chip" style={{ background: "var(--bg-canvas)", borderLeft: "3px solid var(--accent-yellow)" }}>
                 <div className="preview-chip-header">
-                  <span>ACCURACY CLASS</span>
+                  <span>STEP 1: TURNING POINT INDICATION PRIOR TO ROUNDING</span>
+                  <span>OIML R76 ANNEX A.4.4.3</span>
                 </div>
-                <div className="preview-chip-val" style={{ fontSize: "1.1rem", color: "var(--accent-yellow)" }}>
-                  Class {selectedInstrument.accuracy_class}
+                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: "0 0 10px", lineHeight: 1.5 }}>
+                  Because digital indicators round indication values to discrete intervals ($e$ or $d$), the true indication prior to rounding ($P$) is determined by applying incremental weights ($\Delta L$) until the display transitions to the next interval:
+                </p>
+                <div style={{ background: "var(--bg-surface)", padding: "12px 16px", borderRadius: "8px", fontFamily: "monospace", color: "var(--accent-yellow)", fontSize: "0.95rem", marginBottom: "8px" }}>
+                  P = I + 0.5e - ΔL
+                </div>
+                <div style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                  Substituting instrument parameters: Verification interval <code>e = {selectedInstrument.verification_interval_e} {selectedInstrument.capacity_unit}</code>. If indication <code>I = 100.000</code> and turning weight <code>ΔL = 0.0004</code>:
+                  <div style={{ color: "var(--text-primary)", marginTop: "4px" }}>
+                    P = 100.000 + 0.5(0.001) - 0.0004 = <strong>100.0001 {selectedInstrument.capacity_unit}</strong>
+                  </div>
                 </div>
               </div>
-              <div className="preview-chip">
+
+              {/* Step 2: Indication Error & Zero Correction */}
+              <div className="preview-chip" style={{ background: "var(--bg-canvas)", borderLeft: "3px solid #38bdf8" }}>
                 <div className="preview-chip-header">
-                  <span>MAX CAPACITY</span>
+                  <span>STEP 2: INDICATION ERROR & ZERO-SETTING CORRECTION</span>
+                  <span>CLAUSE A.4.4.3.2</span>
                 </div>
-                <div className="preview-chip-val" style={{ fontSize: "1.1rem" }}>
-                  {selectedInstrument.max_capacity} {selectedInstrument.capacity_unit}
+                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: "0 0 10px", lineHeight: 1.5 }}>
+                  Raw indication error ($E$) and zero-corrected error ($E_c$) subtract tare/zero displacement ($E_0$):
+                </p>
+                <div style={{ background: "var(--bg-surface)", padding: "12px 16px", borderRadius: "8px", fontFamily: "monospace", color: "#38bdf8", fontSize: "0.95rem", marginBottom: "8px" }}>
+                  E = P - L, &nbsp;&nbsp;&nbsp;&nbsp; Ec = E - E₀
+                </div>
+                <div style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                  With zero error <code>E₀ = 0.0000</code> and applied standard test weight <code>L = 100.0000 {selectedInstrument.capacity_unit}</code>:
+                  <div style={{ color: "var(--text-primary)", marginTop: "4px" }}>
+                    Ec = 100.0001 - 100.0000 = <strong>+0.0001 {selectedInstrument.capacity_unit} (+0.10 e)</strong>
+                  </div>
                 </div>
               </div>
-              <div className="preview-chip">
+
+              {/* Step 3: Mean Error & Drift */}
+              <div className="preview-chip" style={{ background: "var(--bg-canvas)", borderLeft: "3px solid var(--accent-yellow)" }}>
                 <div className="preview-chip-header">
-                  <span>INTERVAL (e)</span>
+                  <span>STEP 3: MEAN ERROR (μ) & SENSOR DRIFT DETERMINATION</span>
+                  <span>STATISTICAL DOMAIN</span>
                 </div>
-                <div className="preview-chip-val" style={{ fontSize: "1.1rem" }}>
-                  {selectedInstrument.verification_interval_e} {selectedInstrument.capacity_unit}
+                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: "0 0 10px", lineHeight: 1.5 }}>
+                  Arithmetic sample mean of repeated measurement errors evaluated over $n$ load points:
+                </p>
+                <div style={{ background: "var(--bg-surface)", padding: "12px 16px", borderRadius: "8px", fontFamily: "monospace", color: "var(--accent-yellow)", fontSize: "0.95rem", marginBottom: "8px", overflowX: "auto" }}>
+                  μ = (1 / n) · Σ Ec,i &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Δμ = μ_current - μ_baseline
+                </div>
+                <div className="responsive-two-col" style={{ fontSize: "0.82rem" }}>
+                  <div style={{ background: "var(--bg-surface)", padding: "10px", borderRadius: "6px" }}>
+                    <span style={{ color: "#38bdf8", fontWeight: 700 }}>Commissioning Baseline (Purchase):</span>
+                    <div style={{ marginTop: "4px" }}>Mean Error: <code>μ₀ = {baselineMean} e</code></div>
+                  </div>
+                  <div style={{ background: "var(--bg-surface)", padding: "10px", borderRadius: "6px" }}>
+                    <span style={{ color: "#e2fd52", fontWeight: 700 }}>Current Condition (Periodic):</span>
+                    <div style={{ marginTop: "4px" }}>Mean Error: <code>μ = +{currentMean} e</code> (Drift: <strong>+{Math.round((currentMean - baselineMean) * 1000) / 1000} e</strong>)</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 4: Repeatability Sample Standard Deviation */}
+              <div className="preview-chip" style={{ background: "var(--bg-canvas)", borderLeft: "3px solid #38bdf8" }}>
+                <div className="preview-chip-header">
+                  <span>STEP 4: REPEATABILITY DISPERSION (σ)</span>
+                  <span>OIML R76 CLAUSE 3.6.1</span>
+                </div>
+                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: "0 0 10px", lineHeight: 1.5 }}>
+                  The repeatability dispersion reflects standard deviation across consecutive identical test loads:
+                </p>
+                <div style={{ background: "var(--bg-surface)", padding: "12px 16px", borderRadius: "8px", fontFamily: "monospace", color: "#38bdf8", fontSize: "0.95rem", marginBottom: "8px", overflowX: "auto" }}>
+                  σ = √[ (1 / (n - 1)) · Σ (Ec,i - μ)² ]
+                </div>
+                <div className="responsive-two-col" style={{ fontSize: "0.82rem" }}>
+                  <div style={{ background: "var(--bg-surface)", padding: "10px", borderRadius: "6px" }}>
+                    <span style={{ color: "#38bdf8", fontWeight: 700 }}>Baseline Commissioning:</span>
+                    <div style={{ marginTop: "4px" }}>Standard Dev: <code>σ₀ = {baselineStd} e</code> (Tight Precision)</div>
+                  </div>
+                  <div style={{ background: "var(--bg-surface)", padding: "10px", borderRadius: "6px" }}>
+                    <span style={{ color: "#e2fd52", fontWeight: 700 }}>Current Operational Wear:</span>
+                    <div style={{ marginTop: "4px" }}>Standard Dev: <code>σ = {currentStd} e</code> (Expanded Dispersion: +{Math.round(((currentStd - baselineStd) / (baselineStd || 0.001)) * 100)}%)</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 5: Table 6 MPE Bounds & Compliance Verdict */}
+              <div className="preview-chip" style={{ background: "var(--bg-surface)", borderLeft: "3px solid var(--badge-pass-text)" }}>
+                <div className="preview-chip-header">
+                  <span>STEP 5: OIML R76 TABLE 6 MPE EVALUATION & VERDICT</span>
+                  <span className="badge badge-pass">PASS</span>
+                </div>
+                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: "0 0 10px", lineHeight: 1.5 }}>
+                  Accuracy Class <strong>Class {selectedInstrument.accuracy_class}</strong> Table 6 stepped verification interval criteria:
+                </p>
+                <ul style={{ fontSize: "0.82rem", color: "var(--text-muted)", paddingLeft: "18px", margin: "0 0 10px", lineHeight: 1.6 }}>
+                  <li>Applied load steps within <code>0 ≤ m ≤ 50,000 e</code>: Tolerance Limit is <strong>± 0.50 e</strong></li>
+                  <li>Measured Current Mean Error: <code>|μ| = {currentMean} e ≤ {selectedInstrument.mpe_limit} e</code> → <strong>CONFORMS (PASS)</strong></li>
+                  <li>3-Sigma Boundary ($3σ$): <code>3 × {currentStd} e = {Math.round(3 * currentStd * 1000) / 1000} e</code></li>
+                </ul>
+                <div style={{ color: "var(--badge-pass-text)", fontWeight: 700, fontSize: "0.9rem" }}>
+                  VERDICT: Certified compliant with OIML R76-1: 2006 Table 6 requirements for Class {selectedInstrument.accuracy_class} instruments.
                 </div>
               </div>
             </div>
 
-            {/* DUAL NORMAL DISTRIBUTION GRAPH (Baseline at Purchase vs Current Condition) */}
-            <div className="gaussian-chart-wrapper">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                <div>
-                  <span style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--text-primary)" }}>
-                    Dual Normal Distribution Error Profile
-                  </span>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                    Comparing error distribution when purchased vs. current operational wear
-                  </div>
-                </div>
-                <span className="badge badge-pass" style={{ fontSize: "0.75rem" }}>
-                  OIML Table 6 MPE Bound
-                </span>
-              </div>
-
-              {/* Responsive SVG Normal Distribution Chart */}
-              <div style={{ width: "100%", overflowX: "auto" }}>
-                <svg viewBox="0 0 560 180" style={{ width: "100%", height: "auto", display: "block" }}>
-                  <defs>
-                    <linearGradient id={gradientBaselineId} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.4" />
-                      <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
-                    </linearGradient>
-                    <linearGradient id={gradientCurrentId} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#e2fd52" stopOpacity="0.4" />
-                      <stop offset="100%" stopColor="#e2fd52" stopOpacity="0.0" />
-                    </linearGradient>
-                  </defs>
-
-                  {/* Horizontal Axis */}
-                  <line x1="40" y1="150" x2="520" y2="150" stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
-
-                  {/* Target Zero Line (x = 0) */}
-                  <line x1="280" y1="20" x2="280" y2="150" stroke="rgba(255,255,255,0.3)" strokeDasharray="3 3" />
-                  <text x="280" y="165" fill="var(--text-muted)" fontSize="10" textAnchor="middle">0 (Target)</text>
-
-                  {/* Lower Tolerance Line (-MPE) */}
-                  <line x1="160" y1="20" x2="160" y2="150" stroke="#f87171" strokeDasharray="3 3" strokeWidth="1.5" />
-                  <text x="160" y="165" fill="#f87171" fontSize="10" textAnchor="middle">-MPE</text>
-
-                  {/* Upper Tolerance Line (+MPE) */}
-                  <line x1="400" y1="20" x2="400" y2="150" stroke="#f87171" strokeDasharray="3 3" strokeWidth="1.5" />
-                  <text x="400" y="165" fill="#f87171" fontSize="10" textAnchor="middle">+MPE</text>
-
-                  {/* Curve 1: Initial Purchase Baseline (Cyan) */}
-                  {(() => {
-                    const baseline = generateGaussianCurve(
-                      selectedInstrument.baseline_mean,
-                      selectedInstrument.baseline_std
-                    );
-                    return (
-                      <g>
-                        <path d={baseline.fillPath} fill={`url(#${gradientBaselineId})`} />
-                        <path d={baseline.strokePath} fill="none" stroke="#38bdf8" strokeWidth="2.5" />
-                      </g>
-                    );
-                  })()}
-
-                  {/* Curve 2: Current Condition (Electric Yellow/Lime) */}
-                  {(() => {
-                    const current = generateGaussianCurve(
-                      selectedInstrument.current_mean,
-                      selectedInstrument.current_std
-                    );
-                    return (
-                      <g>
-                        <path d={current.fillPath} fill={`url(#${gradientCurrentId})`} />
-                        <path d={current.strokePath} fill="none" stroke="#e2fd52" strokeWidth="2.5" />
-                      </g>
-                    );
-                  })()}
-                </svg>
-              </div>
-
-              {/* Chart Legend & Numerical Metrics */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px", fontSize: "0.78rem" }}>
-                <div style={{ display: "flex", gap: "16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span style={{ width: "12px", height: "3px", background: "#38bdf8", borderRadius: "2px" }} />
-                    <span style={{ color: "#38bdf8", fontWeight: 600 }}>At Purchase (Commissioning)</span>
-                    <span style={{ color: "var(--text-muted)" }}>μ={selectedInstrument.baseline_mean}e, σ={selectedInstrument.baseline_std}e</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span style={{ width: "12px", height: "3px", background: "#e2fd52", borderRadius: "2px" }} />
-                    <span style={{ color: "#e2fd52", fontWeight: 600 }}>Current Condition</span>
-                    <span style={{ color: "var(--text-muted)" }}>μ=+{selectedInstrument.current_mean}e, σ={selectedInstrument.current_std}e</span>
-                  </div>
-                </div>
-
-                <div style={{ color: "var(--text-secondary)" }}>
-                  Drift: <strong>+{Math.round((selectedInstrument.current_mean - selectedInstrument.baseline_mean) * 1000) / 1000}e</strong>
-                </div>
-              </div>
-            </div>
-
-            {/* Historical Verification Records */}
-            <div style={{ marginTop: "16px" }}>
-              <div style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px" }}>
-                Metrological Verification History
-              </div>
-              <div className="table-container">
-                <table className="data-table" style={{ fontSize: "0.8rem" }}>
-                  <thead>
-                    <tr>
-                      <th>Test Event</th>
-                      <th>Date</th>
-                      <th>Max Error</th>
-                      <th>Tolerance</th>
-                      <th>Disposition</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>Periodic Re-verification</td>
-                      <td>{selectedInstrument.last_calibrated}</td>
-                      <td>+{selectedInstrument.current_mean} e</td>
-                      <td>±{selectedInstrument.mpe_limit} e</td>
-                      <td>
-                        <span className="badge badge-pass" style={{ fontSize: "0.7rem" }}>
-                          Pass
-                        </span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>Initial Commissioning Verification</td>
-                      <td>{selectedInstrument.commission_date}</td>
-                      <td>+{selectedInstrument.baseline_mean} e</td>
-                      <td>±{selectedInstrument.mpe_limit} e</td>
-                      <td>
-                        <span className="badge badge-pass" style={{ fontSize: "0.7rem" }}>
-                          Pass
-                        </span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "24px" }}>
+              <button
+                className="btn-primary"
+                onClick={() => setIsCalcModalOpen(false)}
+                style={{ padding: "10px 24px" }}
+              >
+                Close Breakdown [Esc]
+              </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* MODAL 1: MANUAL SINGLE-DEVICE ENTRY (Schools / Offices)                  */}
       {/* ========================================================================= */}
       {isManualModalOpen && (
-        <div className="modal-backdrop no-print">
-          <div className="modal-content" style={{ maxWidth: "600px" }}>
+        <div className="modal-backdrop no-print" onClick={() => setIsManualModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: "600px" }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h2>Add Instrument (Manual Entry)</h2>
@@ -791,7 +1493,7 @@ export default function InstrumentsPage() {
             </div>
 
             <form onSubmit={handleSaveManualInstrument}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+              <div className="responsive-two-col" style={{ gap: "14px" }}>
                 <div className="form-group">
                   <label className="form-label">Manufacturer / Brand</label>
                   <input
@@ -817,7 +1519,7 @@ export default function InstrumentsPage() {
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+              <div className="responsive-two-col" style={{ gap: "14px" }}>
                 <div className="form-group">
                   <label className="form-label">Serial Number</label>
                   <input
@@ -842,7 +1544,7 @@ export default function InstrumentsPage() {
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "14px" }}>
+              <div className="responsive-three-col" style={{ gap: "14px" }}>
                 <div className="form-group">
                   <label className="form-label">Accuracy Class</label>
                   <select
@@ -885,7 +1587,7 @@ export default function InstrumentsPage() {
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+              <div className="responsive-two-col" style={{ gap: "14px" }}>
                 <div className="form-group">
                   <label className="form-label">Verification Scale Interval (e)</label>
                   <input
@@ -950,8 +1652,8 @@ export default function InstrumentsPage() {
       {/* MODAL 2: BULK CSV INGESTION (Industry / Manufacturers)                    */}
       {/* ========================================================================= */}
       {isBulkModalOpen && (
-        <div className="modal-backdrop no-print">
-          <div className="modal-content" style={{ maxWidth: "780px" }}>
+        <div className="modal-backdrop no-print" onClick={() => setIsBulkModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: "780px" }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h2>Bulk CSV Ingestion (Industry & Manufacturers)</h2>

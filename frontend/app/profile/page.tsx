@@ -148,7 +148,7 @@ export default function ProfilePage() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginBottom: "32px" }}>
+      <div className="profile-two-grid">
         {/* Active Profile Card */}
         <div className="studio-panel">
           <div className="panel-title">
@@ -281,7 +281,7 @@ export default function ProfilePage() {
           These accounts originate from <code>~/user.csv</code>. Clicking any card tests automatic first-time database provisioning and instant role switching.
         </p>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "14px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "14px" }}>
           {csvDemoAccounts.map((acc) => (
             <div
               key={acc.email}

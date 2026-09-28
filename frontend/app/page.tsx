@@ -127,7 +127,7 @@ export default function HomePage() {
         <div className="studio-grid">
           {/* Left Column: Form Controls */}
           <div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div className="responsive-two-col">
               <div className="form-group">
                 <label className="form-label">Accuracy Class</label>
                 <select
@@ -156,7 +156,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div className="responsive-two-col">
               <div className="form-group">
                 <label className="form-label">Verification Type</label>
                 <select
@@ -181,7 +181,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div className="responsive-two-col">
               <div className="form-group">
                 <label className="form-label">Applied Load L (g)</label>
                 <input
@@ -204,7 +204,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div className="responsive-two-col">
               <div className="form-group">
                 <label className="form-label">
                   <input
