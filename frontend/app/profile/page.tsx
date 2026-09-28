@@ -66,7 +66,8 @@ export default function ProfilePage() {
     setIsLoading(true);
     setStatusMsg(null);
     try {
-      const res = await fetch("http://localhost:8000/api/auth/login", {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+      const res = await fetch(`${apiBase}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
@@ -110,7 +111,8 @@ export default function ProfilePage() {
 
   const handleLogout = async () => {
     try {
-      await fetch("http://localhost:8000/api/auth/logout", { method: "POST" });
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+      await fetch(`${apiBase}/api/auth/logout`, { method: "POST" });
     } catch {
       // ignore
     }
